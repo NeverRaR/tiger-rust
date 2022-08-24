@@ -1,0 +1,224 @@
+use crate::lexer::lexer;
+use crate::parser::ast;
+use crate::parser::parser::parser::lexer::ValueInfo;
+use crate::error::error::PosInfo;
+
+grammar;
+
+Decs: Box<ast::Decs> = {
+       => Box::new(ast::Decs::Empty),
+    Dec Decs => Box::new(ast::Decs::Decs(<>)),
+}
+
+Dec: Box<ast::Dec> = {
+    TypeDec => Box::new(ast::Dec::TypeDec(<>)),
+    VarDec => Box::new(ast::Dec::VarDec(<>)),
+    FunDec => Box::new(ast::Dec::FunDec(<>)),
+}
+
+TypeDec: Box<ast::TypeDec> = {
+    TYPE <ID> EQ <Ty> =>  Box::new(ast::TypeDec::Dec(<>)),
+}
+
+Ty : Box<ast::Ty> = {
+    ID => Box::new(ast::Ty::Id(<>)),
+    LBRACE <TyFields> RBRACE  => Box::new(ast::Ty::Fields(<>)),
+    ARRAY OF <ID>   => Box::new(ast::Ty::Array(<>)),
+}
+
+TyFields: Box<ast::TyFields> = {
+        => Box::new(ast::TyFields::Empty),
+    SomeTyFields => Box::new(ast::TyFields::Some(<>)),
+}
+
+SomeTyFields : Box<ast::SomeTyFields> = {
+    <id:ID> COLON <type_id:ID>  => Box::new(ast::SomeTyFields::Some{id:id,type_id:type_id}),
+    <id:ID> COLON <type_id:ID> COMMA <tail:SomeTyFields> => Box::new(ast::SomeTyFields::List{id:id,type_id:type_id,tail:tail}),
+}
+
+VarDec: Box<ast::VarDec> = {
+    VAR <ID> ASSIGN <Exp> => Box::new(ast::VarDec::DefaultInit(<>)),
+    VAR <id:ID> COLON <type_id:ID> ASSIGN <exp:Exp> => Box::new(ast::VarDec::TypeInit { var_id: id, type_id: type_id, exp: exp }),
+}
+
+FunDec : Box<ast::FunDec> = {
+    FUNCTION <ID> LPAREN <TyFields> RPAREN EQ <Exp> => Box::new(ast::FunDec::Proc(<>)),
+    FUNCTION <id:ID> LPAREN <fields:TyFields> RPAREN COLON <type_id:ID> EQ <exp:Exp> => Box::new(ast::FunDec::Func { id: id,fields: fields ,type_id: type_id, exp: exp })
+}
+
+ExpSeq : Box<ast::ExpSeq> = {
+     => Box::new(ast::ExpSeq::Empty),
+    SomeExpSeq => Box::new(ast::ExpSeq::Some(<>)),
+}
+
+SomeExpSeq : Box<ast::SomeExpSeq> = {
+    Exp => Box::new(ast::SomeExpSeq::Some(<>)),
+    <Exp> SEMICOLON <SomeExpSeq> => Box::new(ast::SomeExpSeq::List(<>)),
+}
+
+LValue : Box<ast::LValue> = {
+    ID => Box::new(ast::LValue::Id(<>)),
+    Refer => Box::new(ast::LValue::Refer(<>)),
+}
+
+Refer : Box<ast::Refer> = {
+    <Refer> DOT <ID> =>Box::new(ast::Refer::ReferField(<>)),
+    <ID> DOT <ID> => Box::new(ast::Refer::Field(<>)),
+    <Refer> LBRACK <Exp> RBRACK => Box::new(ast::Refer::ReferArray(<>)), 
+    <ID> LBRACK <Exp> RBRACK  => Box::new(ast::Refer::Array(<>))
+}
+
+pub Exp : Box<ast::Exp> = {
+    Match => Box::new(ast::Exp::Match(<>)),
+    Unmatch => Box::new(ast::Exp::Unmatch(<>)),
+}
+
+Match : Box<ast::Match> = {
+    IF <if_exp:Exp> THEN <then_exp:Match> ELSE <else_exp:Match>  => Box::new(ast::Match::IfThenElse{if_exp:if_exp,then_exp:then_exp,else_exp:else_exp}),
+    WHILE <cond:Exp> DO <body:Match> => Box::new(ast::Match::While{cond:cond,body:body}),
+    FOR <id:ID> ASSIGN <start:Exp> TO <end:Exp> DO <body:Match> => Box::new(ast::Match::For{id:id,start:start,end:end,body:body}),
+    <LValue> ASSIGN <Slice> => Box::new(ast::Match::Assign(<>)),
+    BREAK => Box::new(ast::Match::Break),
+    Slice => Box::new(ast::Match::Slice(<>)),
+}
+
+Unmatch : Box<ast::Unmatch> = {
+    IF <if_exp: Exp> THEN <then_exp:Exp> => Box::new(ast::Unmatch::IfThen{if_exp:if_exp,then_exp:then_exp}),
+    WHILE <cond:Exp> DO <body:Unmatch> => Box::new(ast::Unmatch::While{cond:cond,body:body}),
+    FOR <id:ID> ASSIGN <start:Exp> TO <end:Exp> DO <body:Unmatch> => Box::new(ast::Unmatch::For{id:id,start:start,end:end,body:body}),
+    IF <Exp> THEN <Match> ELSE <Unmatch> => Box::new(ast::Unmatch::IfThenElse(<>)),
+}
+
+//meta => factor => term => item => bit => piece => sheet => slice => fragment => scrap
+Slice : Box<ast::Slice> = {
+    <type_id:ID> LBRACK <len:Exp> RBRACK OF <init : Slice> => Box::new(ast::Slice::Array{type_id:type_id,len:len,init:init}), 
+    <ID> LBRACE <RecList> RBRACE => Box::new(ast::Slice::Record(<>)),
+    Sheet => Box::new(ast::Slice::Sheet(<>)),
+}
+
+Sheet : Box<ast::Sheet> = {
+    <Sheet> OR <Piece> => Box::new(ast::Sheet::Or(<>)),
+    Piece => Box::new(ast::Sheet::Piece(<>)),
+}
+
+Piece : Box<ast::Piece> = {
+    <Piece> AND <Bit> => Box::new(ast::Piece::And(<>)),
+    Bit => Box::new(ast::Piece::Bit(<>)),
+}
+
+Bit : Box<ast::Bit> = {
+    <Item> EQ <Item> => Box::new(ast::Bit::Eq(<>)),
+    <Item> NEQ <Item> => Box::new(ast::Bit::Neq(<>)),
+    <Item> LT <Item> => Box::new(ast::Bit::Lt(<>)),
+    <Item> LE <Item> => Box::new(ast::Bit::Le(<>)),
+    <Item> GT <Item> => Box::new(ast::Bit::Gt(<>)),
+    <Item> GE <Item> => Box::new(ast::Bit::Ge(<>)),
+    Item => Box::new(ast::Bit::Item(<>)),
+}
+
+
+Item : Box<ast::Item> = {
+    <Item> PLUS <Term> => Box::new(ast::Item::Plus(<>)),
+    <Item> MINUS <Term> => Box::new(ast::Item::Minus(<>)),
+    Term => Box::new(ast::Item::Term(<>)),
+}
+
+Term : Box<ast::Term> = {
+    <Term> TIMES <Factor> => Box::new(ast::Term::Times(<>)),
+    <Term> DIVIDE <Factor> => Box::new(ast::Term::Divide(<>)),
+    Factor => Box::new(ast::Term::Factor(<>)),
+}
+
+
+Factor : Box<ast::Factor> = {
+   MINUS <Meta> => Box::new(ast::Factor::MMeta(<>)),
+   Meta => Box::new(ast::Factor::Meta(<>)),
+}
+
+Meta : Box<ast::Meta> = {
+    STRING => Box::new(ast::Meta::String(<>)),
+    ID => Box::new(ast::Meta::Id(<>)),
+    INT => Box::new(ast::Meta::Int(<>)),
+    NIL => Box::new(ast::Meta::Nil),
+    Refer => Box::new(ast::Meta::Refer(<>)),
+    LPAREN <ExpSeq> RPAREN => Box::new(ast::Meta::CapSeq(<>)),
+    <ID> LPAREN <ArgsList> RPAREN => Box::new(ast::Meta::Call(<>)),
+    LET <Decs> IN <ExpSeq> END => Box::new(ast::Meta::Let(<>)),
+}
+
+ArgsList : Box<ast::ArgsList> = {
+    => Box::new(ast::ArgsList::Empty),
+   SomeArgsList => Box::new(ast::ArgsList::Some(<>)),
+}
+
+SomeArgsList : Box<ast::SomeArgsList> = {
+   Exp => Box::new(ast::SomeArgsList::Some(<>)),
+   <Exp> COMMA <SomeArgsList> => Box::new(ast::SomeArgsList::List(<>)),
+}
+
+RecList : Box<ast::RecList> = {
+       => Box::new(ast::RecList::Empty),
+    SomeRecList => Box::new(ast::RecList::Some(<>)), 
+}
+
+SomeRecList : Box<ast::SomeRecList> = {
+    <ID> EQ <Exp> => Box::new(ast::SomeRecList::Some(<>)),
+    <ID> EQ <Exp> COMMA <SomeRecList> => Box::new(ast::SomeRecList::List(<>)),
+}
+
+
+
+extern {
+    type Error = ();
+
+
+
+    enum lexer::Token{
+        COMMENT => lexer::Token::Comment,
+        ID => lexer::Token::Id(<ValueInfo<String>>),
+        STRING => lexer::Token::String(<ValueInfo<String>>),
+        INT => lexer::Token::Int(<ValueInfo<u64>>),
+        COMMA => lexer::Token::Comma(<PosInfo>),
+        COLON => lexer::Token::Colon(<PosInfo>),
+        SEMICOLON => lexer::Token::Semicolon(<PosInfo>),
+        LPAREN => lexer::Token::Lparen(<PosInfo>),
+        RPAREN => lexer::Token::Rparen(<PosInfo>),
+        LBRACK => lexer::Token::Lbrack(<PosInfo>),
+        RBRACK => lexer::Token::Rbrack(<PosInfo>),
+        LBRACE => lexer::Token::Lbrace(<PosInfo>),
+        RBRACE => lexer::Token::Rbrace(<PosInfo>),
+        DOT => lexer::Token::Dot(<PosInfo>),
+        PLUS => lexer::Token::Plus(<PosInfo>),
+        MINUS => lexer::Token::Minus(<PosInfo>),
+        TIMES => lexer::Token::Times(<PosInfo>),
+        DIVIDE => lexer::Token::Divide(<PosInfo>),
+        EQ => lexer::Token::Eq(<PosInfo>),
+        NEQ => lexer::Token::Neq(<PosInfo>),
+        LT => lexer::Token::Lt(<PosInfo>),
+        LE => lexer::Token::Le(<PosInfo>),
+        GT => lexer::Token::Gt(<PosInfo>),
+        GE => lexer::Token::Ge(<PosInfo>),
+        AND => lexer::Token::And(<PosInfo>),
+        OR => lexer::Token::Or(<PosInfo>),
+        ASSIGN => lexer::Token::Assign(<PosInfo>),
+        ARRAY => lexer::Token::Array(<PosInfo>),
+        IF => lexer::Token::If(<PosInfo>),
+        THEN => lexer::Token::Then(<PosInfo>),
+        ELSE => lexer::Token::Else(<PosInfo>),
+        WHILE => lexer::Token::While(<PosInfo>),
+        FOR => lexer::Token::For(<PosInfo>),
+        TO => lexer::Token::To(<PosInfo>),
+        DO => lexer::Token::Do(<PosInfo>),
+        LET => lexer::Token::Let(<PosInfo>),
+        IN => lexer::Token::In(<PosInfo>),
+        END => lexer::Token::End(<PosInfo>),
+        OF => lexer::Token::Of(<PosInfo>),
+        BREAK => lexer::Token::Break(<PosInfo>),
+        NIL => lexer::Token::Nil(<PosInfo>),
+        FUNCTION => lexer::Token::Function(<PosInfo>),
+        VAR => lexer::Token::Var(<PosInfo>),
+        TYPE => lexer::Token::Type(<PosInfo>),
+    }
+    
+    
+}
